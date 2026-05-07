@@ -193,6 +193,9 @@ class VotingDialog(QDialog):
         action_row = QHBoxLayout()
         self.maximize_button = QPushButton("Maximize")
         self.maximize_button.clicked.connect(self.toggle_maximized)
+        self.reset_button = QPushButton("Reset Selections")
+        self.reset_button.setObjectName("ghostButton")
+        self.reset_button.clicked.connect(self.reset_selections)
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setObjectName("ghostButton")
         self.cancel_button.clicked.connect(self.reject)
@@ -201,6 +204,7 @@ class VotingDialog(QDialog):
         self.submit_button.clicked.connect(self.submit_vote)
         action_row.addWidget(self.maximize_button)
         action_row.addStretch(1)
+        action_row.addWidget(self.reset_button)
         action_row.addWidget(self.cancel_button)
         action_row.addWidget(self.submit_button)
         layout.addLayout(action_row)
@@ -247,9 +251,12 @@ class VotingDialog(QDialog):
             for candidate in candidates:
                 poll_id = poll["id"]
                 candidate_id = candidate["id"]
+                # Absorb the `checked` bool that QPushButton.clicked emits — without
+                # this, the bool ends up bound to `pid` and the rest of the defaults
+                # are kept, breaking selection silently.
                 card = CandidateVoteCard(
                     candidate,
-                    on_click=(lambda pid=poll_id, cid=candidate_id: self.select_candidate(pid, cid)),
+                    on_click=(lambda _checked=False, pid=poll_id, cid=candidate_id: self.toggle_candidate(pid, cid)),
                 )
                 self.candidate_buttons[candidate_id] = card.button
                 inner_layout.addWidget(card)
@@ -300,23 +307,59 @@ class VotingDialog(QDialog):
             self.showMaximized()
             self.maximize_button.setText("Restore")
 
-    def select_candidate(self, poll_id: int, candidate_id: int) -> None:
-        self.pending_votes[poll_id] = candidate_id
+    def toggle_candidate(self, poll_id: int, candidate_id: int) -> None:
+        """Click handler: select if not selected, deselect if same candidate
+        re-clicked. Re-clicking re-enables the rest of the poll's candidates."""
+        if self.pending_votes.get(poll_id) == candidate_id:
+            self.pending_votes.pop(poll_id, None)
+            self._apply_poll_selection(poll_id, selected_id=None)
+        else:
+            self.pending_votes[poll_id] = candidate_id
+            self._apply_poll_selection(poll_id, selected_id=candidate_id)
+        self._update_status()
+
+    def reset_selections(self) -> None:
+        """Clear all pending selections and re-enable every candidate button."""
+        self.pending_votes.clear()
+        for poll in db.list_polls(self.election_id):
+            self._apply_poll_selection(poll["id"], selected_id=None)
+        self._update_status()
+
+    def _apply_poll_selection(self, poll_id: int, selected_id: int | None) -> None:
+        """Update enabled/selected state for every candidate button in a poll.
+        selected_id=None means no selection in this poll (everything reset)."""
         for candidate in db.list_candidates(poll_id):
             button = self.candidate_buttons.get(candidate["id"])
-            if button:
+            if not button:
+                continue
+            if selected_id is None:
+                button.setEnabled(True)
+                button.setText("Vote")
+                button.setProperty("selected", False)
+            elif candidate["id"] == selected_id:
+                button.setEnabled(True)
+                button.setText("Selected (click to undo)")
+                button.setProperty("selected", True)
+            else:
                 button.setEnabled(False)
-                if candidate["id"] == candidate_id:
-                    button.setText("Selected")
-                    button.setProperty("selected", True)
-                else:
-                    button.setText("Disabled")
-                    button.setProperty("selected", False)
-                button.style().unpolish(button)
-                button.style().polish(button)
+                button.setText("Locked")
+                button.setProperty("selected", False)
+            button.style().unpolish(button)
+            button.style().polish(button)
+
+    def _update_status(self) -> None:
         selected = len(self.pending_votes)
         required = len(self.required_poll_ids())
-        self.vote_status.setText(f"Selected {selected} of {required} poll(s).")
+        if selected == 0:
+            self.vote_status.setText("No selections yet.")
+        elif selected < required:
+            self.vote_status.setText(
+                f"Selected {selected} of {required} poll(s). Pick one in each remaining poll, or click a 'Selected' button to change."
+            )
+        else:
+            self.vote_status.setText(
+                f"All {required} poll(s) chosen. Click 'Submit Vote' to record, or click a 'Selected' button to change."
+            )
 
     def submit_vote(self) -> None:
         required_poll_ids = self.required_poll_ids()
@@ -1086,10 +1129,12 @@ class VoteItWindow(QMainWindow):
             }
             #voteButton:hover { background: #185abc; }
             #voteButton:disabled { background: #aeb8c6; color: white; }
-            #voteButton[selected="true"]:disabled {
+            #voteButton[selected="true"] {
                 background: #0b7a53;
                 color: white;
+                min-width: 170px;
             }
+            #voteButton[selected="true"]:hover { background: #086846; }
             #emptyHint {
                 color: #6b7886;
                 padding: 30px;
