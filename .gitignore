@@ -1,0 +1,44 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Database
+*.sqlite3
+*.db
+
+# OS
+.DS_Store
+Thumbs.db
+
+# PyInstaller
+*.spec
+*.manifest
+*.exe
+
+# Build output
+installer_output/
+*.app
+*.egg-link
+
+# Temporary files
+*.tmp
+.cache/
