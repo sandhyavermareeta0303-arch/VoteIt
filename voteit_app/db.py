@@ -308,6 +308,7 @@ def get_results(election_id: int) -> list[dict]:
                 c.id AS candidate_id,
                 c.name AS candidate_name,
                 c.description AS candidate_description,
+                c.photo_path AS candidate_photo,
                 COUNT(v.id) AS votes
             FROM polls p
             JOIN candidates c ON c.poll_id = p.id AND c.active = 1

@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <!--
+    VoteIt MSI authoring (WiX 3.x).
+    Builds with:
+      .\scripts\build_msi.ps1
+    Output:
+      installer_output\VoteIt_Setup.msi
+
+    The MSI installs to %ProgramFiles%\VoteIt (per-machine, requires admin),
+    creates Start Menu and Desktop shortcuts, and registers Add/Remove Programs
+    entry. Uninstall via Settings > Apps or msiexec /x.
+    User data in %LOCALAPPDATA%\VoteIt is preserved across uninstall.
+  -->
+  <Product Id="*"
+           Name="VoteIt"
+           Language="1033"
+           Version="$(var.ProductVersion)"
+           Manufacturer="VoteIt"
+           UpgradeCode="A6F0E2C8-9C3D-4F4D-9F7E-3F1B72D0E101">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Description="VoteIt - offline desktop voting system"
+             Manufacturer="VoteIt" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- ARPNOMODIFY is set by WixUI_Minimal already; do not duplicate. -->
+    <Property Id="ARPNOREPAIR" Value="1" />
+    <Property Id="ARPCONTACT" Value="VoteIt" />
+    <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" />
+
+    <Feature Id="MainFeature" Title="VoteIt Application" Level="1">
+      <ComponentGroupRef Id="HarvestedFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
+      <ComponentRef Id="ARPDisplayIcon" />
+    </Feature>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="VoteIt" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="VoteIt" />
+      </Directory>
+      <Directory Id="DesktopFolder" />
+    </Directory>
+
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="StartMenuShortcut" Guid="*">
+        <Shortcut Id="StartMenuVoteIt"
+                  Name="VoteIt"
+                  Description="Open VoteIt"
+                  Target="[INSTALLFOLDER]VoteIt.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveAppProgramsFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
+        <RegistryValue Root="HKLM"
+                       Key="Software\VoteIt"
+                       Name="StartMenuShortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="ARPDisplayIcon" Guid="*">
+        <RegistryValue Root="HKLM"
+                       Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\[ProductCode]"
+                       Name="DisplayIcon"
+                       Value="[INSTALLFOLDER]VoteIt.exe"
+                       Type="string"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="*">
+        <Shortcut Id="DesktopVoteIt"
+                  Name="VoteIt"
+                  Description="Open VoteIt"
+                  Target="[INSTALLFOLDER]VoteIt.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKLM"
+                       Key="Software\VoteIt"
+                       Name="DesktopShortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <UI>
+      <UIRef Id="WixUI_Minimal" />
+    </UI>
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+  </Product>
+</Wix>

@@ -51,19 +51,47 @@ The executable will be created in `dist\VoteIt\VoteIt.exe`.
 
 ## Build Installer
 
-One-click installer:
+### MSI installer (recommended)
+
+Real Windows Installer `.msi` with proper Add/Remove Programs entry and
+`msiexec` install/uninstall. Requires [WiX Toolset 3.14](https://wixtoolset.org/)
+to be installed first.
+
+```powershell
+.\scripts\build_msi.ps1
+```
+
+Output: `installer_output\VoteIt_Setup.msi`
+
+Install / uninstall:
+
+```powershell
+# Install (admin required, GUI prompt)
+msiexec /i installer_output\VoteIt_Setup.msi
+
+# Silent install
+msiexec /i installer_output\VoteIt_Setup.msi /qn
+
+# Uninstall (or use Settings > Apps > VoteIt)
+msiexec /x installer_output\VoteIt_Setup.msi /qn
+```
+
+The MSI installs to `%ProgramFiles%\VoteIt`, creates Start Menu and Desktop
+shortcuts, and registers in Add/Remove Programs. Election data in
+`%LOCALAPPDATA%\VoteIt` is preserved across uninstall.
+
+### One-click EXE installer (no admin required)
 
 ```powershell
 .\scripts\build_one_click_installer.ps1
 ```
 
-Output:
+Output: `installer_output\VoteIt_One_Click_Setup.exe`
 
-```powershell
-installer_output\VoteIt_One_Click_Setup.exe
-```
+Self-contained per-user installer. Does not require Python or admin rights on
+the target computer.
 
-This installer is self-contained and does not require Python on the target computer.
+### Inno Setup installer
 
-After building the EXE, open `installer\VoteIt.iss` in Inno Setup and compile it.
-The installer will be created in `installer_output\VoteIt_Setup.exe`.
+After building the EXE, open `installer\VoteIt.iss` in Inno Setup and compile.
+Output: `installer_output\VoteIt_Setup.exe`.

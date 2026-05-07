@@ -39,6 +39,9 @@ installer_output/
 *.app
 *.egg-link
 
+# Local tooling (downloaded WiX binaries etc.)
+tools/
+
 # Temporary files
 *.tmp
 .cache/

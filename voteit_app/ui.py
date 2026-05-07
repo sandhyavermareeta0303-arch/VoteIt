@@ -1,15 +1,15 @@
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
     QFrame,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -32,32 +32,174 @@ from .export import export_results_to_excel
 from .paths import ensure_app_dirs
 
 
+PHOTO_PLACEHOLDER_TEXT = "No Photo"
+
+
+def load_pixmap(path: str | None, width: int, height: int) -> QPixmap | None:
+    if not path:
+        return None
+    try:
+        if not Path(path).exists():
+            return None
+    except OSError:
+        return None
+    pixmap = QPixmap(path)
+    if pixmap.isNull():
+        return None
+    return pixmap.scaled(width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+
+class CandidateVoteCard(QFrame):
+    def __init__(self, candidate: dict, on_click) -> None:
+        super().__init__()
+        self.setObjectName("candidateCard")
+        self.candidate_id = candidate["id"]
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(12)
+
+        photo = QLabel()
+        photo.setObjectName("candidatePhoto")
+        photo.setFixedSize(96, 96)
+        photo.setAlignment(Qt.AlignCenter)
+        pixmap = load_pixmap(candidate.get("photo_path"), 96, 96)
+        if pixmap is not None:
+            photo.setPixmap(pixmap)
+        else:
+            photo.setText(PHOTO_PLACEHOLDER_TEXT)
+        layout.addWidget(photo)
+
+        text_box = QVBoxLayout()
+        text_box.setSpacing(4)
+        name = QLabel(candidate["name"])
+        name.setObjectName("candidateName")
+        name.setWordWrap(True)
+        desc = QLabel(candidate.get("description") or "")
+        desc.setObjectName("candidateDesc")
+        desc.setWordWrap(True)
+        text_box.addWidget(name)
+        text_box.addWidget(desc)
+        text_box.addStretch(1)
+
+        self.button = QPushButton("Vote")
+        self.button.setObjectName("voteButton")
+        self.button.clicked.connect(on_click)
+        text_box.addWidget(self.button, alignment=Qt.AlignLeft)
+
+        layout.addLayout(text_box, 1)
+
+
+class CandidateResultCard(QFrame):
+    def __init__(self, row: dict, total_votes: int, is_winner: bool) -> None:
+        super().__init__()
+        self.setObjectName("resultCard")
+        if is_winner:
+            self.setProperty("winner", True)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(14)
+
+        photo = QLabel()
+        photo.setObjectName("resultPhoto")
+        photo.setFixedSize(86, 86)
+        photo.setAlignment(Qt.AlignCenter)
+        pixmap = load_pixmap(row.get("candidate_photo"), 86, 86)
+        if pixmap is not None:
+            photo.setPixmap(pixmap)
+        else:
+            photo.setText(PHOTO_PLACEHOLDER_TEXT)
+        layout.addWidget(photo)
+
+        info = QVBoxLayout()
+        info.setSpacing(3)
+        name = QLabel(row["candidate_name"])
+        name.setObjectName("resultName")
+        name.setWordWrap(True)
+        desc = QLabel(row.get("candidate_description") or "")
+        desc.setObjectName("resultDesc")
+        desc.setWordWrap(True)
+        info.addWidget(name)
+        info.addWidget(desc)
+        if is_winner and row["votes"] > 0:
+            badge = QLabel("Winner")
+            badge.setObjectName("winnerBadge")
+            badge.setAlignment(Qt.AlignCenter)
+            info.addWidget(badge, alignment=Qt.AlignLeft)
+        info.addStretch(1)
+        layout.addLayout(info, 1)
+
+        right = QVBoxLayout()
+        right.setSpacing(0)
+        votes = QLabel(str(row["votes"]))
+        votes.setObjectName("voteCount")
+        votes.setAlignment(Qt.AlignCenter)
+        votes_caption = QLabel("vote(s)")
+        votes_caption.setObjectName("voteCaption")
+        votes_caption.setAlignment(Qt.AlignCenter)
+        share = (row["votes"] / total_votes * 100) if total_votes else 0
+        share_label = QLabel(f"{share:.1f}%")
+        share_label.setObjectName("voteShare")
+        share_label.setAlignment(Qt.AlignCenter)
+        right.addWidget(votes)
+        right.addWidget(votes_caption)
+        right.addWidget(share_label)
+        layout.addLayout(right)
+
+
 class VotingDialog(QDialog):
-    def __init__(self, election_id: int, election_label: str, session_id: int, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        election_id: int,
+        election_label: str,
+        session_id: int,
+        target_screen_index: int = 0,
+        open_maximized: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.election_id = election_id
         self.session_id = session_id
+        self.target_screen_index = target_screen_index
+        self.open_maximized = open_maximized
+        self._maximized_once = False
         self.pending_votes: dict[int, int] = {}
         self.candidate_buttons: dict[int, QPushButton] = {}
 
         self.setWindowTitle(f"Voting - {election_label}")
         self.setModal(False)
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.WindowMinimizeButtonHint
+            | Qt.WindowMaximizeButtonHint
+            | Qt.WindowCloseButtonHint
+            | Qt.WindowSystemMenuHint
+            | Qt.WindowTitleHint
+        )
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
         title = QLabel(election_label)
         title.setObjectName("voterTitle")
-        status = QLabel("Voting enabled.")
-        status.setObjectName("status")
-        self.vote_status = status
+        title.setWordWrap(True)
+        self.vote_status = QLabel("Voting enabled.")
+        self.vote_status.setObjectName("status")
         layout.addWidget(title)
-        layout.addWidget(status)
+        layout.addWidget(self.vote_status)
 
         action_row = QHBoxLayout()
+        self.maximize_button = QPushButton("Maximize")
+        self.maximize_button.clicked.connect(self.toggle_maximized)
         self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setObjectName("ghostButton")
         self.cancel_button.clicked.connect(self.reject)
         self.submit_button = QPushButton("Submit Vote")
         self.submit_button.setObjectName("primaryAction")
         self.submit_button.clicked.connect(self.submit_vote)
+        action_row.addWidget(self.maximize_button)
         action_row.addStretch(1)
         action_row.addWidget(self.cancel_button)
         action_row.addWidget(self.submit_button)
@@ -65,8 +207,12 @@ class VotingDialog(QDialog):
 
         self.vote_scroll = QScrollArea()
         self.vote_scroll.setWidgetResizable(True)
+        self.vote_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.vote_scroll.setObjectName("voteScroll")
         self.vote_container = QWidget()
-        self.vote_layout = QVBoxLayout(self.vote_container)
+        self.polls_row = QHBoxLayout(self.vote_container)
+        self.polls_row.setSpacing(14)
+        self.polls_row.setContentsMargins(2, 2, 2, 2)
         self.vote_scroll.setWidget(self.vote_container)
         layout.addWidget(self.vote_scroll, 1)
 
@@ -74,64 +220,85 @@ class VotingDialog(QDialog):
         self.fit_to_screen()
 
     def render_voting_screen(self) -> None:
-        self.clear_layout(self.vote_layout)
+        self.clear_layout(self.polls_row)
         self.candidate_buttons = {}
         polls = db.list_polls(self.election_id)
+
+        any_rendered = False
         for poll in polls:
             candidates = db.list_candidates(poll["id"])
             if not candidates:
                 continue
-            box = QGroupBox(poll["name"])
-            grid = QGridLayout(box)
-            for index, candidate in enumerate(candidates):
-                card = self.build_candidate_card(poll["id"], candidate)
-                grid.addWidget(card, index // 3, index % 3)
-            self.vote_layout.addWidget(box)
-        self.vote_layout.addStretch(1)
+            any_rendered = True
+            column = QGroupBox(poll["name"])
+            column.setObjectName("pollColumn")
+            column_layout = QVBoxLayout(column)
+            column_layout.setContentsMargins(10, 18, 10, 10)
+            column_layout.setSpacing(10)
+
+            inner_scroll = QScrollArea()
+            inner_scroll.setObjectName("pollScroll")
+            inner_scroll.setWidgetResizable(True)
+            inner_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            inner = QWidget()
+            inner_layout = QVBoxLayout(inner)
+            inner_layout.setSpacing(10)
+            inner_layout.setContentsMargins(2, 2, 2, 2)
+            for candidate in candidates:
+                poll_id = poll["id"]
+                candidate_id = candidate["id"]
+                card = CandidateVoteCard(
+                    candidate,
+                    on_click=(lambda pid=poll_id, cid=candidate_id: self.select_candidate(pid, cid)),
+                )
+                self.candidate_buttons[candidate_id] = card.button
+                inner_layout.addWidget(card)
+            inner_layout.addStretch(1)
+            inner_scroll.setWidget(inner)
+            column_layout.addWidget(inner_scroll, 1)
+
+            column.setMinimumWidth(300)
+            column.setMaximumWidth(380)
+            self.polls_row.addWidget(column)
+
+        if not any_rendered:
+            empty = QLabel("This election has no polls with candidates.")
+            empty.setObjectName("emptyHint")
+            empty.setAlignment(Qt.AlignCenter)
+            self.polls_row.addWidget(empty)
+
+        self.polls_row.addStretch(1)
 
     def fit_to_screen(self) -> None:
-        screen = QApplication.primaryScreen()
-        if not screen:
-            self.resize(980, 640)
+        screens = QApplication.screens()
+        if not screens:
+            self.resize(1100, 720)
             return
+        idx = self.target_screen_index if 0 <= self.target_screen_index < len(screens) else 0
+        screen = screens[idx]
         available = screen.availableGeometry()
-        width = min(1040, max(760, int(available.width() * 0.9)))
-        height = min(640, max(480, int(available.height() * 0.82)))
+        width = min(1280, max(900, int(available.width() * 0.85)))
+        height = min(820, max(600, int(available.height() * 0.85)))
         self.resize(width, height)
         self.move(
             available.x() + (available.width() - width) // 2,
             available.y() + (available.height() - height) // 2,
         )
 
-    def build_candidate_card(self, poll_id: int, candidate: dict) -> QFrame:
-        card = QFrame()
-        card.setObjectName("candidateCard")
-        layout = QVBoxLayout(card)
-        image = QLabel()
-        image.setObjectName("candidatePhoto")
-        image.setAlignment(Qt.AlignCenter)
-        image.setFixedSize(150, 112)
-        photo_path = candidate["photo_path"]
-        if photo_path and Path(photo_path).exists():
-            pixmap = QPixmap(photo_path).scaled(150, 112, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            image.setPixmap(pixmap)
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self.open_maximized and not self._maximized_once:
+            self._maximized_once = True
+            self.showMaximized()
+            self.maximize_button.setText("Restore")
+
+    def toggle_maximized(self) -> None:
+        if self.isMaximized():
+            self.showNormal()
+            self.maximize_button.setText("Maximize")
         else:
-            image.setText("No Photo")
-        name = QLabel(candidate["name"])
-        name.setObjectName("candidateName")
-        name.setWordWrap(True)
-        desc = QLabel(candidate["description"])
-        desc.setWordWrap(True)
-        desc.setObjectName("candidateDesc")
-        button = QPushButton("Vote")
-        button.clicked.connect(lambda: self.select_candidate(poll_id, candidate["id"]))
-        self.candidate_buttons[candidate["id"]] = button
-        layout.addWidget(image, alignment=Qt.AlignCenter)
-        layout.addWidget(name)
-        layout.addWidget(desc)
-        layout.addStretch(1)
-        layout.addWidget(button)
-        return card
+            self.showMaximized()
+            self.maximize_button.setText("Restore")
 
     def select_candidate(self, poll_id: int, candidate_id: int) -> None:
         self.pending_votes[poll_id] = candidate_id
@@ -139,7 +306,14 @@ class VotingDialog(QDialog):
             button = self.candidate_buttons.get(candidate["id"])
             if button:
                 button.setEnabled(False)
-                button.setText("Selected" if candidate["id"] == candidate_id else "Disabled")
+                if candidate["id"] == candidate_id:
+                    button.setText("Selected")
+                    button.setProperty("selected", True)
+                else:
+                    button.setText("Disabled")
+                    button.setProperty("selected", False)
+                button.style().unpolish(button)
+                button.style().polish(button)
         selected = len(self.pending_votes)
         required = len(self.required_poll_ids())
         self.vote_status.setText(f"Selected {selected} of {required} poll(s).")
@@ -162,7 +336,7 @@ class VotingDialog(QDialog):
         polls = db.list_polls(self.election_id)
         return {poll["id"] for poll in polls if db.list_candidates(poll["id"])}
 
-    def clear_layout(self, layout: QVBoxLayout) -> None:
+    def clear_layout(self, layout) -> None:
         while layout.count():
             item = layout.takeAt(0)
             widget = item.widget()
@@ -259,6 +433,9 @@ class VoteItWindow(QMainWindow):
         add_candidate = QPushButton("Add Candidate")
         add_candidate.clicked.connect(self.create_candidate)
         self.candidate_list = QListWidget()
+        self.candidate_list.setIconSize(QSize(56, 56))
+        self.candidate_list.setObjectName("setupCandidateList")
+        self.candidate_list.setSpacing(4)
         candidate_layout.addWidget(QLabel("Poll"))
         candidate_layout.addWidget(self.candidate_poll_combo)
         candidate_layout.addWidget(self.candidate_name)
@@ -296,6 +473,18 @@ class VoteItWindow(QMainWindow):
         top.addWidget(change_password)
         layout.addLayout(top)
 
+        display_box = QGroupBox("Voter Display (projector / second monitor)")
+        display_layout = QHBoxLayout(display_box)
+        display_layout.addWidget(QLabel("Display"))
+        self.display_combo = QComboBox()
+        display_layout.addWidget(self.display_combo, 1)
+        self.maximize_check = QCheckBox("Open maximized on selected display")
+        display_layout.addWidget(self.maximize_check)
+        self.refresh_displays_button = QPushButton("Refresh Displays")
+        self.refresh_displays_button.clicked.connect(self.refresh_displays)
+        display_layout.addWidget(self.refresh_displays_button)
+        layout.addWidget(display_box)
+
         self.vote_status = QLabel("Ready. Select an active election to open the voter window.")
         self.vote_status.setObjectName("status")
         layout.addWidget(self.vote_status)
@@ -308,6 +497,11 @@ class VoteItWindow(QMainWindow):
         layout.addWidget(info_box)
         layout.addStretch(1)
         self.vote_election_combo.currentIndexChanged.connect(self.update_voting_summary)
+        self.display_combo.currentIndexChanged.connect(self.persist_display_choice)
+        self.maximize_check.toggled.connect(self.persist_maximize_choice)
+
+        self.refresh_displays()
+        self.load_display_preferences()
         return page
 
     def build_results_tab(self) -> QWidget:
@@ -325,10 +519,68 @@ class VoteItWindow(QMainWindow):
         top.addWidget(export)
         layout.addLayout(top)
 
-        self.result_list = QListWidget()
-        layout.addWidget(self.result_list, 1)
+        self.result_summary = QLabel("")
+        self.result_summary.setObjectName("resultSummary")
+        layout.addWidget(self.result_summary)
+
+        self.result_scroll = QScrollArea()
+        self.result_scroll.setObjectName("resultScroll")
+        self.result_scroll.setWidgetResizable(True)
+        self.result_container = QWidget()
+        self.result_layout = QVBoxLayout(self.result_container)
+        self.result_layout.setSpacing(14)
+        self.result_layout.setContentsMargins(4, 4, 4, 4)
+        self.result_scroll.setWidget(self.result_container)
+        layout.addWidget(self.result_scroll, 1)
+
         self.result_election_combo.currentIndexChanged.connect(self.refresh_results)
         return page
+
+    def refresh_displays(self) -> None:
+        screens = QApplication.screens()
+        current = self.display_combo.currentData()
+        self.display_combo.blockSignals(True)
+        self.display_combo.clear()
+        primary = QApplication.primaryScreen()
+        for index, screen in enumerate(screens):
+            label = screen.name() or f"Display {index + 1}"
+            geom = screen.geometry()
+            tag = " (primary)" if screen is primary else ""
+            self.display_combo.addItem(
+                f"{index + 1}. {label}{tag}  [{geom.width()}x{geom.height()}]",
+                index,
+            )
+        if current is not None:
+            i = self.display_combo.findData(current)
+            if i >= 0:
+                self.display_combo.setCurrentIndex(i)
+        self.display_combo.blockSignals(False)
+
+    def load_display_preferences(self) -> None:
+        idx_str = db.get_setting("voter_display_index")
+        if idx_str is not None:
+            try:
+                target = int(idx_str)
+                i = self.display_combo.findData(target)
+                if i >= 0:
+                    self.display_combo.blockSignals(True)
+                    self.display_combo.setCurrentIndex(i)
+                    self.display_combo.blockSignals(False)
+            except ValueError:
+                pass
+        max_str = db.get_setting("voter_open_maximized")
+        if max_str is not None:
+            self.maximize_check.blockSignals(True)
+            self.maximize_check.setChecked(max_str == "1")
+            self.maximize_check.blockSignals(False)
+
+    def persist_display_choice(self) -> None:
+        idx = self.display_combo.currentData()
+        if idx is not None:
+            db.set_setting("voter_display_index", str(int(idx)))
+
+    def persist_maximize_choice(self) -> None:
+        db.set_setting("voter_open_maximized", "1" if self.maximize_check.isChecked() else "0")
 
     def refresh_all(self) -> None:
         self.refresh_elections()
@@ -390,8 +642,15 @@ class VoteItWindow(QMainWindow):
         if not poll_id:
             return
         for candidate in db.list_candidates(poll_id):
-            photo_note = "photo" if candidate["photo_path"] else "no photo"
-            self.candidate_list.addItem(f"{candidate['name']} - {photo_note}")
+            label = candidate["name"]
+            description = candidate.get("description") or ""
+            if description:
+                label = f"{label}\n{description}"
+            item = QListWidgetItem(label)
+            photo_path = candidate.get("photo_path")
+            if photo_path and Path(photo_path).exists():
+                item.setIcon(QIcon(photo_path))
+            self.candidate_list.addItem(item)
 
     def create_election(self) -> None:
         name = self.election_name.text().strip()
@@ -522,13 +781,27 @@ class VoteItWindow(QMainWindow):
             self.warn(str(exc))
             self.update_voting_summary()
             return
+
+        target_screen = self.display_combo.currentData()
+        if target_screen is None:
+            target_screen = 0
+        open_max = self.maximize_check.isChecked()
         election_label = self.vote_election_combo.currentText()
-        self.voting_window = VotingDialog(election_id, election_label, session_id, self)
+        self.voting_window = VotingDialog(
+            election_id,
+            election_label,
+            session_id,
+            target_screen_index=int(target_screen),
+            open_maximized=open_max,
+            parent=self,
+        )
         self.voting_window.finished.connect(self.voting_window_closed)
         self.voting_window.show()
         self.voting_window.raise_()
         self.voting_window.activateWindow()
-        self.vote_status.setText("Voter window open. It will lock again after submit or close.")
+        self.vote_status.setText(
+            "Voter window open. It will lock again after submit or close."
+        )
 
     def lock_voting(self) -> None:
         if self.voting_window and self.voting_window.isVisible():
@@ -547,9 +820,7 @@ class VoteItWindow(QMainWindow):
         election_id = self.vote_election_combo.currentData()
         if not election_id:
             self.enable_button.setEnabled(False)
-            self.vote_summary.setText(
-                "No election selected."
-            )
+            self.vote_summary.setText("No election selected.")
             return
         election = db.get_election(election_id)
         polls = db.list_polls(election_id)
@@ -614,18 +885,45 @@ class VoteItWindow(QMainWindow):
 
     def refresh_results(self) -> None:
         election_id = self.result_election_combo.currentData()
-        self.result_list.clear()
+        self._clear_layout(self.result_layout)
         if not election_id:
+            self.result_summary.setText("Select an election to view results.")
+            self.result_layout.addStretch(1)
             return
         rows = db.get_results(election_id)
-        current_poll = None
+        if not rows:
+            self.result_summary.setText("No candidates yet.")
+            self.result_layout.addStretch(1)
+            return
+
+        polls_in_order: list[str] = []
+        by_poll: dict[str, list[dict]] = {}
         for row in rows:
-            if row["poll_name"] != current_poll:
-                current_poll = row["poll_name"]
-                header = QListWidgetItem(f"--- {current_poll} ---")
-                header.setFlags(Qt.NoItemFlags)
-                self.result_list.addItem(header)
-            self.result_list.addItem(f"{row['candidate_name']}: {row['votes']} vote(s)")
+            if row["poll_name"] not in by_poll:
+                polls_in_order.append(row["poll_name"])
+                by_poll[row["poll_name"]] = []
+            by_poll[row["poll_name"]].append(row)
+
+        total_votes_all = sum(r["votes"] for r in rows)
+        self.result_summary.setText(
+            f"{len(polls_in_order)} poll(s) | {total_votes_all} total vote(s) recorded"
+        )
+
+        for poll_name in polls_in_order:
+            poll_rows = by_poll[poll_name]
+            total_votes = sum(r["votes"] for r in poll_rows)
+            max_votes = max((r["votes"] for r in poll_rows), default=0)
+            box = QGroupBox(f"{poll_name}   -   {total_votes} vote(s)")
+            box.setObjectName("resultPoll")
+            box_layout = QVBoxLayout(box)
+            box_layout.setSpacing(8)
+            box_layout.setContentsMargins(12, 22, 12, 12)
+            for row in poll_rows:
+                is_winner = row["votes"] == max_votes and max_votes > 0
+                box_layout.addWidget(CandidateResultCard(row, total_votes, is_winner))
+            self.result_layout.addWidget(box)
+
+        self.result_layout.addStretch(1)
 
     def export_results(self) -> None:
         election_id = self.result_election_combo.currentData()
@@ -642,7 +940,7 @@ class VoteItWindow(QMainWindow):
     def warn(self, message: str) -> None:
         QMessageBox.warning(self, "VoteIt", message)
 
-    def clear_layout(self, layout: QVBoxLayout) -> None:
+    def _clear_layout(self, layout) -> None:
         while layout.count():
             item = layout.takeAt(0)
             widget = item.widget()
@@ -650,7 +948,7 @@ class VoteItWindow(QMainWindow):
             if widget:
                 widget.deleteLater()
             elif child_layout:
-                self.clear_layout(child_layout)
+                self._clear_layout(child_layout)
 
     def apply_styles(self) -> None:
         self.setStyleSheet(
@@ -669,8 +967,8 @@ class VoteItWindow(QMainWindow):
                 color: #102a43;
             }
             #voterTitle {
-                font-size: 22px;
-                font-weight: 700;
+                font-size: 24px;
+                font-weight: 800;
                 color: #102a43;
             }
             #subtitle {
@@ -680,7 +978,7 @@ class VoteItWindow(QMainWindow):
             QGroupBox {
                 background: #ffffff;
                 border: 1px solid #d9dee7;
-                border-radius: 6px;
+                border-radius: 8px;
                 margin-top: 16px;
                 padding: 12px;
                 font-weight: 600;
@@ -710,6 +1008,14 @@ class VoteItWindow(QMainWindow):
             QPushButton:disabled {
                 background: #aeb8c6;
             }
+            #ghostButton {
+                background: #ffffff;
+                color: #102a43;
+                border: 1px solid #c8d0dc;
+            }
+            #ghostButton:hover {
+                background: #eef2f7;
+            }
             #primaryAction {
                 background: #0b7a53;
                 min-width: 150px;
@@ -724,24 +1030,150 @@ class VoteItWindow(QMainWindow):
                 padding: 10px;
                 font-weight: 600;
             }
+
+            /* Voter dialog */
+            #voteScroll, #pollScroll, #resultScroll {
+                border: 0;
+                background: transparent;
+            }
+            #pollColumn {
+                background: #ffffff;
+                border: 1px solid #d9dee7;
+                border-radius: 10px;
+                margin-top: 12px;
+                font-size: 15px;
+                font-weight: 700;
+                color: #102a43;
+            }
+            #pollColumn::title {
+                subcontrol-origin: margin;
+                left: 14px;
+                padding: 0 6px;
+            }
             #candidateCard {
                 background: #fbfcfe;
                 border: 1px solid #dce3ed;
-                border-radius: 6px;
-                min-width: 210px;
-                max-width: 250px;
+                border-radius: 10px;
+            }
+            #candidateCard:hover {
+                border: 1px solid #1f6feb;
+                background: #ffffff;
             }
             #candidatePhoto {
                 background: #e9eef5;
                 border: 1px solid #d4dce8;
-                border-radius: 4px;
+                border-radius: 6px;
+                color: #8893a4;
+                font-size: 11px;
             }
             #candidateName {
-                font-size: 17px;
+                font-size: 16px;
                 font-weight: 700;
+                color: #102a43;
             }
             #candidateDesc {
                 color: #526173;
+                font-size: 12px;
+            }
+            #voteButton {
+                background: #1f6feb;
+                color: white;
+                padding: 7px 18px;
+                border-radius: 4px;
+                font-weight: 700;
+                border: 0;
+                min-width: 100px;
+            }
+            #voteButton:hover { background: #185abc; }
+            #voteButton:disabled { background: #aeb8c6; color: white; }
+            #voteButton[selected="true"]:disabled {
+                background: #0b7a53;
+                color: white;
+            }
+            #emptyHint {
+                color: #6b7886;
+                padding: 30px;
+                font-size: 14px;
+            }
+
+            /* Results */
+            #resultSummary {
+                color: #475569;
+                font-weight: 600;
+                padding: 4px 2px 8px 2px;
+            }
+            #resultPoll {
+                background: #ffffff;
+                border: 1px solid #d9dee7;
+                border-radius: 10px;
+                margin-top: 18px;
+                font-size: 15px;
+                font-weight: 700;
+                color: #102a43;
+            }
+            #resultPoll::title {
+                subcontrol-origin: margin;
+                left: 14px;
+                padding: 0 6px;
+            }
+            #resultCard {
+                background: #fbfcfe;
+                border: 1px solid #dce3ed;
+                border-radius: 10px;
+            }
+            #resultCard[winner="true"] {
+                background: #f3fbf7;
+                border: 1px solid #0b7a53;
+            }
+            #resultPhoto {
+                background: #e9eef5;
+                border: 1px solid #d4dce8;
+                border-radius: 6px;
+                color: #8893a4;
+                font-size: 11px;
+            }
+            #resultName {
+                font-size: 16px;
+                font-weight: 700;
+                color: #102a43;
+            }
+            #resultDesc {
+                color: #526173;
+                font-size: 12px;
+            }
+            #voteCount {
+                font-size: 30px;
+                font-weight: 800;
+                color: #1f6feb;
+                min-width: 70px;
+            }
+            #voteCaption {
+                color: #6b7886;
+                font-size: 11px;
+            }
+            #voteShare {
+                color: #102a43;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            #winnerBadge {
+                background: #0b7a53;
+                color: white;
+                border-radius: 10px;
+                padding: 3px 12px;
+                font-size: 11px;
+                font-weight: 700;
+                max-width: 80px;
+            }
+
+            /* Setup candidate list */
+            #setupCandidateList::item {
+                border-bottom: 1px solid #eef2f7;
+                padding: 6px;
+            }
+            #setupCandidateList::item:selected {
+                background: #e8f0fe;
+                color: #102a43;
             }
             """
         )
